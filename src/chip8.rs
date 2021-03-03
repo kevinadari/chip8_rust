@@ -33,7 +33,7 @@ const PC_START: usize = 0x200;
 
 struct Chip8 {
     // Current opcode
-    opcode: u16,
+    opcode: usize,
 
     memory: [u8; MEM_SIZE],
 
@@ -41,19 +41,22 @@ struct Chip8 {
     v: [u8; REG_SIZE],
 
     // Address Register
-    addr_reg: u16,
+    addr_reg: usize,
 
     // Program Counter starts at 0x200
     pc: usize,
 
     // Only used to store Return Address (16 bit)
-    stack: [u16; STACK_SIZE],
+    stack: [usize; STACK_SIZE],
 
     // Stack pointer
-    sp: u8,
+    sp: usize,
 
     // Screen 64 x 32 pixels, monochrome
     screen: [u8; SCREEN_WIDTH * SCREEN_HEIGHT],
+
+    // Flag for drawing screen
+    draw_flag: bool,
 
     // Array to store current of hex keyboard (0x0 - 0xF)
     key: [u8; KEY_SIZE],
@@ -83,6 +86,7 @@ impl Chip8 {
             memory: [0; MEM_SIZE],
             // Clear screen
             screen: [0; SCREEN_WIDTH * SCREEN_HEIGHT],
+            draw_flag: false,
 
             // Initialize timers
             delay_timer: 0,
@@ -93,8 +97,8 @@ impl Chip8 {
         };
 
         // Load fontset
-        for i in 0..FONT_SET_SIZE {
-            emu.memory[i] = FONT_SET[i];
+        for (i, byte) in FONT_SET.iter().enumerate() {
+            emu.memory[i] = *byte;
         }
 
         emu
@@ -105,39 +109,49 @@ impl Chip8 {
         let mut buffer = Vec::<u8>::new();
         let buf_size = f.read_to_end(&mut buffer)?;
 
-        for i in 0..buf_size - 1 {
-            // excluding EOF
-            self.memory[PC_START + i] = buffer[i];
-        }
+        // excluding EOF
+        self.memory[PC_START..((buf_size - 1) + PC_START)]
+            .clone_from_slice(&buffer[..(buf_size - 1)]);
 
         Ok(buf_size - 1) // excluding EOF
     }
 
     fn emulate(&mut self) {
         // Fetch opcode
-        self.opcode = memory[pc] << 8 | memory[pc + 1];
+        self.opcode = (self.memory[self.pc] as usize) << 8 | self.memory[self.pc + 1] as usize;
 
-        // TODO: Can we just have opcode as local variable only in this function?
         // Decode & execute opcode
-        match (self.opcode & 0xF000) {
-            0x0000 => opcode_0(),
-            0x1000 => opcode_1(), 
-            0x2000 => opcode_2(),
-            0x3000 => opcode_3(),
-            0x4000 => opcode_4(),
-            0x5000 => opcode_5(),
-            0x6000 => opcode_6(),
-            0x7000 => opcode_7(),
-            0x8000 => opcode_8(),
-            0x9000 => opcode_9(),
-            0xA000 => opcode_A(),
-            0xB000 => opcode_B(),
-            0xC000 => opcode_C(),
-            0xD000 => opcode_D(),
-            0xE000 => opcode_E(),
-            0xF000 => opcode_F(),
+        match self.opcode & 0xF000 {
+            0x0000 => self.opcode_0(),
+            0x1000 => self.opcode_1(),
+            0x2000 => self.opcode_2(),
+            0x3000 => self.opcode_3(),
+            0x4000 => self.opcode_4(),
+            0x5000 => self.opcode_5(),
+            0x6000 => self.opcode_6(),
+            0x7000 => self.opcode_7(),
+            0x8000 => self.opcode_8(),
+            0x9000 => self.opcode_9(),
+            0xA000 => self.opcode_a(),
+            0xB000 => self.opcode_b(),
+            0xC000 => self.opcode_c(),
+            0xD000 => self.opcode_d(),
+            0xE000 => self.opcode_e(),
+            0xF000 => self.opcode_f(),
+            _ => panic!("Unknown opcode: {:x}!", self.opcode),
         };
+
         // Update timers
+        if self.delay_timer > 0 {
+            self.delay_timer -= 1;
+        };
+
+        if self.sound_timer > 0 {
+            if self.sound_timer == 1 {
+                // TODO: sound beep
+            };
+            self.sound_timer -= 1;
+        };
     }
 
     fn opcode_0(&mut self) {
@@ -146,13 +160,13 @@ impl Chip8 {
                 // Clears the screen
                 self.screen = [0; SCREEN_WIDTH * SCREEN_HEIGHT];
                 self.pc += 2;
-            },
+            }
             0x00EE => {
                 // Returns from a subroutine
                 self.sp -= 1;
                 self.pc = self.stack[self.sp];
-            },
-            _ => {}      // TODO: calls machine code routine at 0x0NNN
+            }
+            _ => panic!("Unknown opcode: 0x{:04X}!", self.opcode),
         };
     }
 
@@ -174,10 +188,12 @@ impl Chip8 {
         // Opcode: 3XNN
         // Skips the next instruction if vX == NN
         let x = (self.opcode & 0x0F00) >> 8;
-        let nn = self.opcode & 0x00FF;
+        let nn = (self.opcode & 0x00FF) as u8;
 
         if self.v[x] == nn {
             self.pc += 4;
+        } else {
+            self.pc += 2;
         };
     }
 
@@ -185,10 +201,12 @@ impl Chip8 {
         // Opcode: 4XNN
         // Skips the next instruction if vX != NN
         let x = (self.opcode & 0x0F00) >> 8;
-        let nn = self.opcode & 0x00FF;
+        let nn = (self.opcode & 0x00FF) as u8;
 
         if self.v[x] != nn {
             self.pc += 4;
+        } else {
+            self.pc += 2;
         };
     }
 
@@ -200,20 +218,22 @@ impl Chip8 {
 
         if self.v[x] == self.v[y] {
             self.pc += 4;
+        } else {
+            self.pc += 2;
         };
     }
 
     fn opcode_6(&mut self) {
         // Opcode: 6XNN
         // Sets vX to NN
-        self.v[(self.opcode & 0x0F00) >> 8] = self.opcode & 0x00FF;
+        self.v[(self.opcode & 0x0F00) >> 8] = (self.opcode & 0x00FF) as u8;
         self.pc += 2;
     }
 
     fn opcode_7(&mut self) {
         // Opcode: 7XNN
         // vX += NN
-        self.v[(self.opcode & 0x0F00) >> 8] += self.opcode & 0x00FF;
+        self.v[(self.opcode & 0x0F00) >> 8] += (self.opcode & 0x00FF) as u8;
         self.pc += 2;
     }
 
@@ -222,11 +242,23 @@ impl Chip8 {
         let x = (self.opcode & 0x0F00) >> 8;
         let y = (self.opcode & 0x00F0) >> 4;
 
-        match (self.opcode & 0x000F) {
-            0x0000 => self.v[x] = self.v[y],  // vX = vY
-            0x0001 => self.v[x] |= self.v[y], // vX = vX | vY
-            0x0002 => self.v[x] &= self.v[y], // vX = vX & vY
-            0x0003 => self.v[x] ^= self.v[y], // vX = vX XOR vY
+        match self.opcode & 0x000F {
+            0x0000 => {
+                self.v[x] = self.v[y];
+                self.pc += 2;
+            }
+            0x0001 => {
+                self.v[x] |= self.v[y];
+                self.pc += 2;
+            }
+            0x0002 => {
+                self.v[x] &= self.v[y];
+                self.pc += 2;
+            }
+            0x0003 => {
+                self.v[x] ^= self.v[y];
+                self.pc += 2;
+            }
             0x0004 => {
                 // vX = vX + vY
                 // set vF to 1 when there's a carry, set to 0, otherwise
@@ -254,8 +286,9 @@ impl Chip8 {
             0x0006 => {
                 // Store lsb of vX in vF
                 // vX >>= 1
-                // TODO: store lsb of vX to vF
+                self.v[0x0F] = self.v[x] & 0x01;
                 self.v[x] >>= 1;
+                self.pc += 2;
             }
             0x0007 => {
                 // vX = vY - vX
@@ -272,10 +305,11 @@ impl Chip8 {
             0x000E => {
                 // Store msb of vX in vF
                 // vX <<= 1
-                // TODO: store msb of vX to vF
+                self.v[0x0F] = self.v[x] & 0x80 >> 7;
                 self.v[x] <<= 1;
+                self.pc += 2;
             }
-            _ => {} // TODO: Unknown opcode
+            _ => panic!("Unknown opcode: {}!", self.opcode),
         };
     }
 
@@ -287,90 +321,154 @@ impl Chip8 {
 
         if self.v[x] != self.v[y] {
             self.pc += 4;
+        } else {
+            self.pc += 2;
         };
     }
 
-    fn opcode_A(&mut self) {
+    fn opcode_a(&mut self) {
         // Opcode: ANNN
         // Sets addr_reg (I) to NNN
         self.addr_reg = self.opcode & 0x0FFF;
         self.pc += 2;
     }
 
-    fn opcode_B(&mut self) {
+    fn opcode_b(&mut self) {
         // Opcode: BNNN
         // Go to address v0 + NNN
-        self.pc = self.v[0] + (self.opcode & 0x0FFF);
+        self.pc = self.v[0] as usize + (self.opcode & 0x0FFF);
     }
 
-    fn opcode_C(&mut self) {
+    fn opcode_c(&mut self) {
         // Opcode: CXNN
         // vX = rand(0 to 255) & NN
-        let secret = rand::thread_rng().gen_range(0, 256);
+        let secret = rand::thread_rng().gen_range(0, 256) as u8;
         let x = (self.opcode & 0x0F00) >> 8;
-        let nn = self.opcode & 0x00FF;
+        let nn = (self.opcode & 0x00FF) as u8;
 
         self.v[x] = secret & nn;
         self.pc += 2;
     }
 
-    fn opcode_D(&self) {
+    fn opcode_d(&mut self) {
         // Opcode: DXYN
         // Draw a sprite at coordinate (vX, vY), w:8px h:(N+1)px
         // Each row of 8 pixels is read as bit-coded from memory at addr_reg
         // addr_reg doesn't change after this instruction
         // Sets vF to 1 if any screen pixels are flipped from set to unset, set to 0, otherwise
-        // TODO: draw function
+        let x = self.v[(self.opcode & 0x0F00) >> 8] as usize;
+        let y = self.v[(self.opcode & 0x00F0) >> 4] as usize;
+        let h = self.opcode & 0x000F; // Do not add 1 because for loop start from 0
+        let mut sprite;
+
+        self.v[0x0F] = 0;
+
+        for y_row in 0..h {
+            sprite = self.memory[y_row + self.addr_reg];
+            for x_col in 0..8 {
+                if sprite & (0x80 >> x_col) != 0 {
+                    let coordinate = x + x_col + ((y + y_row) * SCREEN_WIDTH);
+
+                    // Sets vF if pixel is flipped from 1 to 0
+                    if self.screen[coordinate] == 1 {
+                        self.v[0x0F] = 1;
+                    }
+                    self.screen[coordinate] ^= 1;
+                }
+            }
+        }
+
+        self.pc += 2;
+        self.draw_flag = true;
     }
 
-    fn opcode_E(&mut self) {
-        match (self.opcode & 0x00FF) {
+    fn opcode_e(&mut self) {
+        let x = (self.opcode & 0x0F00) >> 8;
+        match self.opcode & 0x00FF {
             0x009E => {
                 // Opcode: EX9E
                 // Skips the next instruction if key[vX] != 0 (it's pressed)
-                let x = (self.opcode & 0x0F00) >> 8;
-
-                if self.key[self.v[x]] != 0 {
+                if self.key[self.v[x] as usize] != 0 {
                     self.pc += 4;
+                } else {
+                    self.pc += 2;
                 };
             }
             0x00A1 => {
                 // Opcode: EXA1
                 // Skips the next instruction if key[vX] == 0 (it's not pressed)
-                let x = (self.opcode & 0x0F00) >> 8;
-
-                if self.key[self.v[x]] == 0 {
+                if self.key[self.v[x] as usize] == 0 {
                     self.pc += 4;
+                } else {
+                    self.pc += 2;
                 };
             }
-            _ => (), // TODO: unknown code
+            _ => panic!("Unknown opcode: {}!", self.opcode),
         };
     }
 
-    fn opcode_F(&mut self) {
+    fn opcode_f(&mut self) {
         // Opcode: FX__
         let x = (self.opcode & 0x0F00) >> 8;
 
-        match (self.opcode & 0x00FF) {
-            0x0007 => self.v[x] = self.delay_timer,
-            0x000A => {} // TODO: await key
-            0x0015 => self.delay_timer = self.v[x],
-            0x0018 => self.sound_timer = self.v[x],
-            0x001E => self.addr_reg += self.v[x],
-            0x0029 => {} // TODO: still dont understand
+        match self.opcode & 0x00FF {
+            0x0007 => {
+                self.v[x] = self.delay_timer;
+                self.pc += 2;
+            }
+            0x000A => {
+                // TODO: wait for key pressed and store it in vX. How?
+            }
+            0x0015 => {
+                self.delay_timer = self.v[x];
+                self.pc += 2;
+            }
+            0x0018 => {
+                self.sound_timer = self.v[x];
+                self.pc += 2;
+            }
+            0x001E => {
+                self.addr_reg += self.v[x] as usize;
+                self.pc += 2;
+            }
+            0x0029 => {
+                // Assign address of font set of character in vX to addr_reg
+                // At this point vX shall have values in [0 to F]
+                if self.v[x] > 0x0F {
+                    panic!("Font set is only for character 0 to F!");
+                };
+
+                self.addr_reg = (self.v[x] * 5) as usize;
+                self.pc += 2;
+            }
             0x0033 => {
                 // Takes BCD form of vX
                 // Stores the hundreds digit at memory[addr_reg]
                 // Stores the tens digit at memory[addr_reg + 1]
                 // Stores the ones digit at memory[addr_reg + 2]
-                self.memory[addr_reg] = self.v[x] / 100;
-                self.memory[addr_reg + 1] = (self.v[x] / 10) % 10;
-                self.memory[addr_reg + 2] = (self.v[x] % 100) % 10;
+                self.memory[self.addr_reg] = self.v[x] / 100;
+                self.memory[self.addr_reg + 1] = (self.v[x] / 10) % 10;
+                self.memory[self.addr_reg + 2] = (self.v[x] % 100) % 10;
 
                 self.pc += 2;
-            },
-            0x0055 => {} // TODO: reg_dump
-            0x0065 => {} // TODO: reg_load
+            }
+            0x0055 => {
+                // Stores v[0 to X] in memory starting at addr_reg
+                // addr_reg is not modified
+                for i in 0..x + 1 {
+                    self.memory[self.addr_reg + i] = self.v[i];
+                }
+                self.pc += 2;
+            }
+            0x0065 => {
+                // Fills v[0 to X] by value in memory starting addr_reg
+                // addr_reg is not modified
+                for i in 0..x + 1 {
+                    self.v[i] = self.memory[self.addr_reg + i];
+                }
+                self.pc += 2;
+            }
+            _ => panic!("Unknown opcode: {}!", self.opcode),
         };
     }
 }
@@ -378,6 +476,11 @@ impl Chip8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn store_opcode(emu: &mut Chip8, opcode: u16) {
+        emu.memory[PC_START] = (opcode >> 8) as u8;
+        emu.memory[PC_START + 1] = (opcode & 0x00FF) as u8;
+    }
 
     #[test]
     fn test_init() {
@@ -387,14 +490,15 @@ mod tests {
         assert_eq!(emu.opcode, 0);
         assert_eq!(emu.addr_reg, 0);
         assert_eq!(emu.sp, 0);
-        assert_eq!(emu.v, [0 as u8; REG_SIZE]); // register is 8 bit wide
-        assert_eq!(emu.stack, [0 as u16; STACK_SIZE]); // stack is 16 bit wide
+        assert_eq!(emu.v, [0_u8; REG_SIZE]); // register is 8 bit wide
+        assert_eq!(emu.stack, [0; STACK_SIZE]); // stack is 16 bit wide
         assert_eq!(emu.memory[0..FONT_SET_SIZE], FONT_SET);
         assert_eq!(
             emu.memory[FONT_SET_SIZE..MEM_SIZE],
-            [0 as u8; MEM_SIZE - FONT_SET_SIZE]
+            [0_u8; MEM_SIZE - FONT_SET_SIZE]
         ); // memory is 8 bit wide
-        assert_eq!(emu.screen, [0 as u8; SCREEN_WIDTH * SCREEN_HEIGHT]); // screen use u8
+        assert_eq!(emu.screen, [0_u8; SCREEN_WIDTH * SCREEN_HEIGHT]); // screen use u8
+        assert_eq!(emu.draw_flag, false);
         assert_eq!(emu.delay_timer, 0);
         assert_eq!(emu.sound_timer, 0);
         assert_eq!(emu.key, [0; KEY_SIZE]); // key use u8
@@ -406,5 +510,49 @@ mod tests {
         let size = emu.load_game(String::from("dummy_game")).unwrap();
 
         assert_eq!(emu.memory[PC_START..PC_START + size], [49, 50, 51, 52]);
+    }
+
+    #[test]
+    fn test_opcode_0_clear_screen() {
+        let mut emu = Chip8::init();
+
+        // Init screen
+        emu.screen = [1; SCREEN_WIDTH * SCREEN_HEIGHT]; // Sets all pixels
+        assert_eq!(emu.screen, [1; SCREEN_WIDTH * SCREEN_HEIGHT]); // Confirms all pixels are set
+
+        // Opcode 00E0: Clear screen
+        store_opcode(&mut emu, 0x00E0);
+
+        // Emulate
+        emu.emulate();
+        assert_eq!(emu.screen, [0; SCREEN_WIDTH * SCREEN_HEIGHT]);
+        assert_eq!(emu.pc, PC_START + 2);
+    }
+
+    #[test]
+    fn test_opcode_0_return() {
+        let mut emu = Chip8::init();
+
+        // Init stack
+        emu.stack[emu.sp] = 0x0251;
+        emu.sp += 1;
+
+        // Opcode 00EE: Returns from subroutine
+        store_opcode(&mut emu, 0x00EE);
+
+        // Emulate
+        emu.emulate();
+        assert_eq!(emu.sp, 0);
+        assert_eq!(emu.pc, 0x0251);
+    }
+
+    #[test]
+    #[should_panic(expected = "Unknown opcode: 0x00F1!")]
+    fn test_opcode_0_unknown() {
+        let mut emu = Chip8::init();
+
+        store_opcode(&mut emu, 0x00F1);
+
+        emu.emulate();
     }
 }
