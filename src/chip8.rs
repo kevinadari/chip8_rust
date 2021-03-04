@@ -262,25 +262,29 @@ impl Chip8 {
             0x0004 => {
                 // vX = vX + vY
                 // set vF to 1 when there's a carry, set to 0, otherwise
-                if self.v[y] > (0xFF - self.v[x]) {
+                let (result, carry) = self.v[x].overflowing_add(self.v[y]);
+
+                if carry {
                     self.v[0x0F] = 1;
                 } else {
                     self.v[0x0F] = 0;
                 };
 
-                self.v[x] += self.v[y];
+                self.v[x] = result;
                 self.pc += 2;
             }
             0x0005 => {
                 // vX = vX - vY
                 // set vF to 0 when there's a borrow, set to 1, otherwise
-                if self.v[x] < self.v[y] {
+                let (result, borrow) = self.v[x].overflowing_sub(self.v[y]);
+
+                if borrow {
                     self.v[0x0F] = 0;
                 } else {
                     self.v[0x0F] = 1;
                 };
 
-                self.v[x] -= self.v[y];
+                self.v[x] = result;
                 self.pc += 2;
             }
             0x0006 => {
@@ -293,13 +297,15 @@ impl Chip8 {
             0x0007 => {
                 // vX = vY - vX
                 // sets vF to 0 there's a borrow, set to 1, otherwise
-                if self.v[y] < self.v[x] {
+                let (result, borrow) = self.v[y].overflowing_sub(self.v[x]);
+
+                if borrow {
                     self.v[0x0F] = 0;
                 } else {
                     self.v[0x0F] = 1;
                 };
 
-                self.v[x] = self.v[y] - self.v[x];
+                self.v[x] = result;
                 self.pc += 2;
             }
             0x000E => {
@@ -477,9 +483,14 @@ impl Chip8 {
 mod tests {
     use super::*;
 
-    fn store_opcode(emu: &mut Chip8, opcode: u16) {
-        emu.memory[PC_START] = (opcode >> 8) as u8;
-        emu.memory[PC_START + 1] = (opcode & 0x00FF) as u8;
+    fn store_opcode(emu: &mut Chip8, opcode: &[u16]) {
+        let mut pc = PC_START;
+
+        for op in opcode {
+            emu.memory[pc] = (op >> 8) as u8;
+            emu.memory[pc + 1] = (op & 0x00FF) as u8;
+            pc += 2;
+        }
     }
 
     #[test]
@@ -521,7 +532,7 @@ mod tests {
         assert_eq!(emu.screen, [1; SCREEN_WIDTH * SCREEN_HEIGHT]); // Confirms all pixels are set
 
         // Opcode 00E0: Clear screen
-        store_opcode(&mut emu, 0x00E0);
+        store_opcode(&mut emu, &[0x00E0]);
 
         // Emulate
         emu.emulate();
@@ -538,7 +549,7 @@ mod tests {
         emu.sp += 1;
 
         // Opcode 00EE: Returns from subroutine
-        store_opcode(&mut emu, 0x00EE);
+        store_opcode(&mut emu, &[0x00EE]);
 
         // Emulate
         emu.emulate();
@@ -551,8 +562,338 @@ mod tests {
     fn test_opcode_0_unknown() {
         let mut emu = Chip8::init();
 
-        store_opcode(&mut emu, 0x00F1);
+        store_opcode(&mut emu, &[0x00F1]);
 
         emu.emulate();
+    }
+
+    #[test]
+    fn test_opcode_1() {
+        let mut emu = Chip8::init();
+
+        store_opcode(&mut emu, &[0x1224]);
+
+        emu.emulate();
+
+        assert_eq!(emu.pc, 0x0224);
+    }
+
+    #[test]
+    fn test_opcode_2() {
+        let mut emu = Chip8::init();
+
+        store_opcode(&mut emu, &[0x2301]);
+
+        emu.emulate();
+
+        assert_eq!(emu.pc, 0x0301);
+        assert_eq!(emu.stack[emu.sp - 1], PC_START);
+    }
+
+    #[test]
+    fn test_opcode_3_skip() {
+        let mut emu = Chip8::init();
+
+        // Init
+        emu.v[0] = 0x23;
+
+        store_opcode(&mut emu, &[0x3023]);
+
+        emu.emulate();
+
+        assert_eq!(emu.pc, PC_START + 4);
+    }
+
+    #[test]
+    fn test_opcode_3_no_skip() {
+        let mut emu = Chip8::init();
+
+        // Init
+        emu.v[0] = 0x23;
+
+        store_opcode(&mut emu, &[0x3021]);
+
+        emu.emulate();
+
+        assert_eq!(emu.pc, PC_START + 2);
+    }
+
+    #[test]
+    fn test_opcode_4_skip() {
+        let mut emu = Chip8::init();
+
+        // Init
+        emu.v[3] = 0x23;
+
+        store_opcode(&mut emu, &[0x4321]);
+
+        emu.emulate();
+
+        assert_eq!(emu.pc, PC_START + 4);
+    }
+
+    #[test]
+    fn test_opcode_4_no_skip() {
+        let mut emu = Chip8::init();
+
+        // Init
+        emu.v[3] = 0x23;
+
+        store_opcode(&mut emu, &[0x4323]);
+
+        emu.emulate();
+
+        assert_eq!(emu.pc, PC_START + 2);
+    }
+
+    #[test]
+    fn test_opcode_5_skip() {
+        let mut emu = Chip8::init();
+
+        // Init
+        emu.v[2] = 0x23;
+        emu.v[3] = 0x23;
+
+        store_opcode(&mut emu, &[0x5230]);
+
+        emu.emulate();
+
+        assert_eq!(emu.pc, PC_START + 4);
+    }
+
+    #[test]
+    fn test_opcode_5_no_skip() {
+        let mut emu = Chip8::init();
+
+        // Init
+        emu.v[2] = 0x23;
+        emu.v[3] = 0x24;
+
+        store_opcode(&mut emu, &[0x5230]);
+
+        emu.emulate();
+
+        assert_eq!(emu.pc, PC_START + 2);
+    }
+
+    #[test]
+    fn test_opcode_6() {
+        let mut emu = Chip8::init();
+
+        store_opcode(&mut emu, &[0x6AFF]);
+
+        emu.emulate();
+
+        assert_eq!(emu.v[0xA], 0x00FF);
+        assert_eq!(emu.pc, PC_START + 2);
+    }
+
+    #[test]
+    fn test_opcode_7() {
+        let mut emu = Chip8::init();
+
+        // Init
+        emu.v[4] = 4;
+
+        store_opcode(&mut emu, &[0x7422]);
+
+        emu.emulate();
+
+        assert_eq!(emu.v[4], 0x0026);
+        assert_eq!(emu.v[0xF], 0); // Check carry flag
+        assert_eq!(emu.pc, PC_START + 2);
+    }
+
+    #[test]
+    fn test_opcode_8_0() {
+        let mut emu = Chip8::init();
+
+        // Init
+        emu.v[6] = 0x12;
+
+        store_opcode(&mut emu, &[0x8260]);
+
+        emu.emulate();
+
+        assert_eq!(emu.v[2], 0x12);
+        assert_eq!(emu.pc, PC_START + 2);
+    }
+
+    #[test]
+    fn test_opcode_8_1() {
+        // vX = vX | vY
+        let mut emu = Chip8::init();
+
+        // Init
+        emu.v[2] = 0xAB;
+        emu.v[7] = 0x14;
+
+        store_opcode(&mut emu, &[0x8271]);
+
+        emu.emulate();
+
+        assert_eq!(emu.v[2], 0xBF);
+        assert_eq!(emu.pc, PC_START + 2);
+    }
+
+    #[test]
+    fn test_opcode_8_2() {
+        // vX = vX & vY
+        let mut emu = Chip8::init();
+
+        // Init
+        emu.v[2] = 0xAB;
+        emu.v[7] = 0x14;
+
+        store_opcode(&mut emu, &[0x8272]);
+
+        emu.emulate();
+
+        assert_eq!(emu.v[2], 0);
+        assert_eq!(emu.pc, PC_START + 2);
+    }
+
+    #[test]
+    fn test_opcode_8_3() {
+        // vX = vX ^ vY
+        let mut emu = Chip8::init();
+
+        // Init
+        emu.v[2] = 0xAB;
+        emu.v[7] = 0x14;
+
+        store_opcode(&mut emu, &[0x8273]);
+
+        emu.emulate();
+
+        assert_eq!(emu.v[2], 0xBF);
+        assert_eq!(emu.pc, PC_START + 2);
+    }
+
+    #[test]
+    fn test_opcode_8_4() {
+        // vX += vY
+        let mut emu = Chip8::init();
+
+        // Init
+        emu.v[1] = 0xFF;
+        emu.v[2] = 0xFF;
+
+        emu.v[4] = 0x12;
+        emu.v[9] = 0x13;
+
+        store_opcode(&mut emu, &[0x8124, 0x8494]);
+
+        // Carry
+        emu.emulate();
+        assert_eq!(emu.v[1], 0xFE);
+        assert_eq!(emu.v[0xF], 1);
+        assert_eq!(emu.pc, PC_START + 2);
+
+        // No carry
+        emu.emulate();
+        assert_eq!(emu.v[4], 0x25);
+        assert_eq!(emu.v[0xF], 0);
+        assert_eq!(emu.pc, PC_START + 4);
+    }
+
+    #[test]
+    fn test_opcode_8_5() {
+        // vX -= vY
+        let mut emu = Chip8::init();
+
+        // Init
+        emu.v[0x5] = 0x78;
+        emu.v[0xA] = 0x24;
+
+        emu.v[1] = 0x0;
+        emu.v[2] = 0x1;
+
+        store_opcode(&mut emu, &[0x85A5, 0x8125]);
+
+        // No borrow
+        emu.emulate();
+        assert_eq!(emu.v[5], 0x54);
+        assert_eq!(emu.v[0xF], 1);
+        assert_eq!(emu.pc, PC_START + 2);
+
+        // Borrow
+        emu.emulate();
+        assert_eq!(emu.v[1], 0xFF);
+        assert_eq!(emu.v[0xF], 0);
+        assert_eq!(emu.pc, PC_START + 4);
+    }
+
+    #[test]
+    fn test_opcode_8_6() {
+        // vX >>= 1, lsb stored in vF
+        let mut emu = Chip8::init();
+
+        // Init
+        emu.v[2] = 0xFD;
+
+        store_opcode(&mut emu, &[0x8236, 0x8236]);
+
+        // lsb is 1
+        emu.emulate();
+        assert_eq!(emu.v[2], 0x7E);
+        assert_eq!(emu.v[0xF], 1);
+        assert_eq!(emu.pc, PC_START + 2);
+
+        // lsb is 0
+        emu.emulate();
+        assert_eq!(emu.v[2], 0x3F);
+        assert_eq!(emu.v[0xF], 0);
+        assert_eq!(emu.pc, PC_START + 4);
+    }
+
+    #[test]
+    fn test_opcode_8_7() {
+        // vX = vY - vX
+        let mut emu = Chip8::init();
+
+        // Init
+        emu.v[1] = 0x25;
+        emu.v[0] = 0x11;
+
+        emu.v[4] = 0x03;
+        emu.v[3] = 0x04;
+
+        store_opcode(&mut emu, &[0x8017, 0x8347]);
+
+        // No borrow
+        emu.emulate();
+        assert_eq!(emu.v[0], 0x14);
+        assert_eq!(emu.v[0x0F], 1);
+        assert_eq!(emu.pc, PC_START + 2);
+
+        // Borrow
+        emu.emulate();
+        assert_eq!(emu.v[3], 0xFF);
+        assert_eq!(emu.v[0x0F], 0);
+        assert_eq!(emu.pc, PC_START + 4);
+    }
+
+    #[test]
+    fn test_opcode_8_e() {
+        // vX <<= 1, msb stored in vF
+        let mut emu = Chip8::init();
+
+        // Init
+        emu.v[2] = 0xBD;
+
+        store_opcode(&mut emu, &[0x823E, 0x823E]);
+
+        // msb is 1
+        emu.emulate();
+        assert_eq!(emu.v[2], 0x7A);
+        assert_eq!(emu.v[0xF], 1);
+        assert_eq!(emu.pc, PC_START + 2);
+
+        // lsb is 0
+        emu.emulate();
+        assert_eq!(emu.v[2], 0xF4);
+        assert_eq!(emu.v[0xF], 0);
+        assert_eq!(emu.pc, PC_START + 4);
     }
 }
