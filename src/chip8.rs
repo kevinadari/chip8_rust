@@ -138,7 +138,7 @@ impl Chip8 {
             0xD000 => self.opcode_d(),
             0xE000 => self.opcode_e(),
             0xF000 => self.opcode_f(),
-            _ => panic!("Unknown opcode: {:x}!", self.opcode),
+            _ => panic!("Unknown opcode: 0x{:04X}!", self.opcode), // Unreachable
         };
 
         // Update timers
@@ -315,7 +315,7 @@ impl Chip8 {
                 self.v[x] <<= 1;
                 self.pc += 2;
             }
-            _ => panic!("Unknown opcode: {}!", self.opcode),
+            _ => panic!("Unknown opcode: 0x{:04X}!", self.opcode),
         };
     }
 
@@ -409,7 +409,7 @@ impl Chip8 {
                     self.pc += 2;
                 };
             }
-            _ => panic!("Unknown opcode: {}!", self.opcode),
+            _ => panic!("Unknown opcode: 0x{:04X}!", self.opcode),
         };
     }
 
@@ -474,7 +474,7 @@ impl Chip8 {
                 }
                 self.pc += 2;
             }
-            _ => panic!("Unknown opcode: {}!", self.opcode),
+            _ => panic!("Unknown opcode: 0x{:04X}!", self.opcode),
         };
     }
 }
@@ -895,5 +895,265 @@ mod tests {
         assert_eq!(emu.v[2], 0xF4);
         assert_eq!(emu.v[0xF], 0);
         assert_eq!(emu.pc, PC_START + 4);
+    }
+
+    #[test]
+    #[should_panic(expected = "Unknown opcode: 0x823A!")]
+    fn test_opcode_8_unknown() {
+        let mut emu = Chip8::init();
+
+        store_opcode(&mut emu, &[0x823A]);
+        emu.emulate();
+    }
+
+    #[test]
+    fn test_opcode_9_skip() {
+        let mut emu = Chip8::init();
+
+        // Init
+        emu.v[1] = 2;
+        emu.v[2] = 3;
+
+        store_opcode(&mut emu, &[0x9120]);
+
+        emu.emulate();
+
+        assert_eq!(emu.pc, PC_START + 4);
+    }
+
+    #[test]
+    fn test_opcode_9_no_skip() {
+        let mut emu = Chip8::init();
+
+        // Init
+        emu.v[1] = 2;
+        emu.v[2] = 2;
+
+        store_opcode(&mut emu, &[0x9120]);
+
+        emu.emulate();
+
+        assert_eq!(emu.pc, PC_START + 2);
+    }
+
+    #[test]
+    fn test_opcode_a() {
+        let mut emu = Chip8::init();
+
+        store_opcode(&mut emu, &[0xA4FE]);
+
+        emu.emulate();
+        assert_eq!(emu.addr_reg, 0x4FE);
+    }
+
+    #[test]
+    fn test_opcode_b() {
+        let mut emu = Chip8::init();
+
+        // Init
+        emu.v[0] = 0xFF;
+
+        store_opcode(&mut emu, &[0xBFFF]);
+
+        emu.emulate();
+        assert_eq!(emu.pc, 0xFF + 0xFFF);
+    }
+
+    #[test]
+    fn test_opcode_c_nn_00() {
+        let mut emu = Chip8::init();
+
+        // Init
+        emu.v[0] = 0xFF;
+
+        store_opcode(&mut emu, &[0xC000]);
+
+        emu.emulate();
+        assert_eq!(emu.v[0], 0);
+        assert_eq!(emu.pc, PC_START + 2);
+    }
+
+    #[test]
+    fn test_opcode_c_nn_ff() {
+        let mut emu = Chip8::init();
+
+        store_opcode(&mut emu, &[0xC07F]);
+
+        emu.emulate();
+        assert_eq!((emu.v[0] & 0x80) >> 7, 0);
+        assert_eq!(emu.pc, PC_START + 2);
+    }
+
+    #[test]
+    #[should_panic(expected = "Unknown opcode: 0xE2FF")]
+    fn test_opcode_e_unknown() {
+        let mut emu = Chip8::init();
+
+        store_opcode(&mut emu, &[0xE2FF]);
+
+        emu.emulate();
+    }
+
+    #[test]
+    fn test_opcode_f_07() {
+        // vX = delay_timer
+        let mut emu = Chip8::init();
+
+        // Init
+        emu.delay_timer = 10;
+
+        store_opcode(&mut emu, &[0xF207]);
+
+        emu.emulate();
+        assert_eq!(emu.v[2], 10);
+        assert_eq!(emu.pc, PC_START + 2);
+    }
+
+    #[test]
+    fn test_opcode_f_15() {
+        // delay_timer = vX
+        let mut emu = Chip8::init();
+
+        // Init
+        emu.v[5] = 19;
+
+        store_opcode(&mut emu, &[0xF515]);
+
+        emu.emulate();
+        assert_eq!(emu.delay_timer, 18);
+        assert_eq!(emu.pc, PC_START + 2);
+    }
+
+    #[test]
+    fn test_opcode_f_18() {
+        // sound_timer = vX
+        let mut emu = Chip8::init();
+
+        // Init
+        emu.v[5] = 45;
+
+        store_opcode(&mut emu, &[0xF518]);
+
+        emu.emulate();
+        assert_eq!(emu.sound_timer, 44);
+        assert_eq!(emu.pc, PC_START + 2);
+    }
+
+    #[test]
+    fn test_opcode_f_1e() {
+        // addr_reg += vX, vF is not affected
+        let mut emu = Chip8::init();
+
+        // Init
+        emu.addr_reg = 4;
+        emu.v[5] = 19;
+
+        store_opcode(&mut emu, &[0xF51E]);
+
+        emu.emulate();
+        assert_eq!(emu.addr_reg, 23);
+        assert_eq!(emu.pc, PC_START + 2);
+    }
+
+    #[test]
+    #[should_panic(expected = "Font set is only for character 0 to F!")]
+    fn test_opcode_f_29_unknown_font() {
+        let mut emu = Chip8::init();
+
+        // Init
+        emu.v[5] = 19;
+
+        store_opcode(&mut emu, &[0xF529]);
+
+        emu.emulate();
+    }
+
+    #[test]
+    fn test_opcode_f_29() {
+        let mut emu = Chip8::init();
+        let mut op = [0; 16];
+
+        // Init
+        for i in 0..0x10 {
+            emu.v[i] = i as u8;
+            op[i] = (0xF029 | (i << 8)) as u16;
+        }
+
+        store_opcode(&mut emu, &op);
+
+        for i in 0..0x10 {
+            emu.emulate();
+            assert_eq!(emu.addr_reg, (i * 5));
+            assert_eq!(emu.pc, PC_START + (i + 1) * 2);
+        }
+    }
+
+    #[test]
+    fn test_opcode_f_33() {
+        let mut emu = Chip8::init();
+
+        // Init
+        emu.addr_reg = 0x504;
+        emu.v[5] = 237;
+
+        store_opcode(&mut emu, &[0xF533]);
+
+        emu.emulate();
+        assert_eq!(emu.memory[emu.addr_reg], 2);
+        assert_eq!(emu.memory[emu.addr_reg + 1], 3);
+        assert_eq!(emu.memory[emu.addr_reg + 2], 7);
+        assert_eq!(emu.pc, PC_START + 2);
+    }
+
+    #[test]
+    fn test_opcode_f_55() {
+        // reg_dump
+        let mut emu = Chip8::init();
+
+        // Init
+        emu.addr_reg = 0x234;
+        for i in 0..8 {
+            emu.v[i] = (i + 0x57) as u8;
+        }
+
+        store_opcode(&mut emu, &[0xF755]);
+
+        emu.emulate();
+        for i in 0..8 {
+            assert_eq!(emu.memory[emu.addr_reg + i], (i + 0x57) as u8);
+        }
+        assert_eq!(emu.addr_reg, 0x234);
+        assert_eq!(emu.pc, PC_START + 2);
+    }
+
+    #[test]
+    fn test_opcode_f_65() {
+        // reg_load
+        let mut emu = Chip8::init();
+
+        // Init
+        emu.addr_reg = 0x234;
+        for i in 0..8 {
+            emu.memory[emu.addr_reg + i] = (i + 0x57) as u8;
+        }
+
+        store_opcode(&mut emu, &[0xF765]);
+
+        emu.emulate();
+        for i in 0..8 {
+            assert_eq!(emu.v[i], (i + 0x57) as u8);
+        }
+        assert_eq!(emu.addr_reg, 0x234);
+        assert_eq!(emu.pc, PC_START + 2);
+    }
+
+    #[test]
+    #[should_panic(expected = "Unknown opcode: 0xF777!")]
+    fn test_opcode_f_unknown() {
+        let mut emu = Chip8::init();
+
+        store_opcode(&mut emu, &[0xF777]);
+
+        emu.emulate();
     }
 }
