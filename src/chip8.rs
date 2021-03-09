@@ -22,18 +22,17 @@ const FONT_SET: [u8; 80] = [
     0xF0, 0x80, 0xF0, 0x80, 0xF0, // E
     0xF0, 0x80, 0xF0, 0x80, 0x80, // F
 ];
-const FONT_SET_SIZE: usize = FONT_SET.len();
 const MEM_SIZE: usize = 4096;
 const STACK_SIZE: usize = 24;
 const REG_SIZE: usize = 16;
-const SCREEN_WIDTH: usize = 64;
-const SCREEN_HEIGHT: usize = 32;
+pub const SCREEN_WIDTH: usize = 64;
+pub const SCREEN_HEIGHT: usize = 32;
 const KEY_SIZE: usize = 16;
 const PC_START: usize = 0x200;
 
-struct Chip8 {
+pub struct Chip8 {
     // Current opcode
-    opcode: usize,
+    pub opcode: usize,
 
     memory: [u8; MEM_SIZE],
 
@@ -53,10 +52,10 @@ struct Chip8 {
     sp: usize,
 
     // Screen 64 x 32 pixels, monochrome
-    screen: [u8; SCREEN_WIDTH * SCREEN_HEIGHT],
+    pub screen: [u8; SCREEN_WIDTH * SCREEN_HEIGHT],
 
     // Flag for drawing screen
-    draw_flag: bool,
+    pub draw_flag: bool,
 
     // Array to store current of hex keyboard (0x0 - 0xF)
     key: [u8; KEY_SIZE],
@@ -70,7 +69,7 @@ struct Chip8 {
 }
 
 impl Chip8 {
-    fn init() -> Chip8 {
+    pub fn init() -> Chip8 {
         let mut emu = Chip8 {
             // Initialize registers and memory
             pc: PC_START,
@@ -104,19 +103,19 @@ impl Chip8 {
         emu
     }
 
-    fn load_game(&mut self, filename: String) -> Result<usize, Box<dyn Error>> {
+    pub fn load_game(&mut self, filename: &str) -> Result<usize, Box<dyn Error>> {
         let mut f = File::open(filename)?;
         let mut buffer = Vec::<u8>::new();
         let buf_size = f.read_to_end(&mut buffer)?;
 
         // excluding EOF
-        self.memory[PC_START..((buf_size - 1) + PC_START)]
-            .clone_from_slice(&buffer[..(buf_size - 1)]);
+        self.memory[PC_START..(buf_size + PC_START)]
+            .clone_from_slice(&buffer[..buf_size]);
 
-        Ok(buf_size - 1) // excluding EOF
+        Ok(buf_size) // excluding EOF
     }
 
-    fn emulate(&mut self) {
+    pub fn emulate(&mut self) {
         // Fetch opcode
         self.opcode = (self.memory[self.pc] as usize) << 8 | self.memory[self.pc + 1] as usize;
 
@@ -160,6 +159,7 @@ impl Chip8 {
                 // Clears the screen
                 self.screen = [0; SCREEN_WIDTH * SCREEN_HEIGHT];
                 self.pc += 2;
+                self.draw_flag = true;
             }
             0x00EE => {
                 // Returns from a subroutine
@@ -179,7 +179,7 @@ impl Chip8 {
     fn opcode_2(&mut self) {
         // Opcode: 2NNN
         // Calls subroutine at 0x0NNN
-        self.stack[self.sp] = self.pc;
+        self.stack[self.sp] = self.pc + 2;
         self.sp += 1;
         self.pc = self.opcode & 0x0FFF;
     }
@@ -233,7 +233,8 @@ impl Chip8 {
     fn opcode_7(&mut self) {
         // Opcode: 7XNN
         // vX += NN
-        self.v[(self.opcode & 0x0F00) >> 8] += (self.opcode & 0x00FF) as u8;
+        let index: usize = (self.opcode & 0x0F00) >> 8;
+        self.v[index] = self.v[index].wrapping_add((self.opcode & 0x00FF) as u8);
         self.pc += 2;
     }
 
@@ -311,7 +312,7 @@ impl Chip8 {
             0x000E => {
                 // Store msb of vX in vF
                 // vX <<= 1
-                self.v[0x0F] = self.v[x] & 0x80 >> 7;
+                self.v[0x0F] = (self.v[x] & 0x80) >> 7;
                 self.v[x] <<= 1;
                 self.pc += 2;
             }
@@ -358,7 +359,7 @@ impl Chip8 {
 
     fn opcode_d(&mut self) {
         // Opcode: DXYN
-        // Draw a sprite at coordinate (vX, vY), w:8px h:(N+1)px
+        // Draw a sprite at coordinate (vX, vY), w:8px h:Npx
         // Each row of 8 pixels is read as bit-coded from memory at addr_reg
         // addr_reg doesn't change after this instruction
         // Sets vF to 1 if any screen pixels are flipped from set to unset, set to 0, otherwise
@@ -371,6 +372,7 @@ impl Chip8 {
 
         for y_row in 0..h {
             sprite = self.memory[y_row + self.addr_reg];
+            // println!("sprite[{}]: {:02X}", y_row, sprite); // Debug
             for x_col in 0..8 {
                 if sprite & (0x80 >> x_col) != 0 {
                     let coordinate = x + x_col + ((y + y_row) * SCREEN_WIDTH);
@@ -503,10 +505,10 @@ mod tests {
         assert_eq!(emu.sp, 0);
         assert_eq!(emu.v, [0_u8; REG_SIZE]); // register is 8 bit wide
         assert_eq!(emu.stack, [0; STACK_SIZE]); // stack is 16 bit wide
-        assert_eq!(emu.memory[0..FONT_SET_SIZE], FONT_SET);
+        assert_eq!(emu.memory[0..FONT_SET.len()], FONT_SET);
         assert_eq!(
-            emu.memory[FONT_SET_SIZE..MEM_SIZE],
-            [0_u8; MEM_SIZE - FONT_SET_SIZE]
+            emu.memory[FONT_SET.len()..MEM_SIZE],
+            [0_u8; MEM_SIZE - FONT_SET.len()]
         ); // memory is 8 bit wide
         assert_eq!(emu.screen, [0_u8; SCREEN_WIDTH * SCREEN_HEIGHT]); // screen use u8
         assert_eq!(emu.draw_flag, false);
@@ -518,9 +520,9 @@ mod tests {
     #[test]
     fn test_load_game() {
         let mut emu = Chip8::init();
-        let size = emu.load_game(String::from("dummy_game")).unwrap();
+        let size = emu.load_game("IBM Logo.ch8").unwrap();
 
-        assert_eq!(emu.memory[PC_START..PC_START + size], [49, 50, 51, 52]);
+        assert_eq!(size, 132);
     }
 
     #[test]
@@ -587,7 +589,7 @@ mod tests {
         emu.emulate();
 
         assert_eq!(emu.pc, 0x0301);
-        assert_eq!(emu.stack[emu.sp - 1], PC_START);
+        assert_eq!(emu.stack[emu.sp - 1], PC_START + 2);
     }
 
     #[test]
@@ -704,6 +706,21 @@ mod tests {
         assert_eq!(emu.pc, PC_START + 2);
     }
 
+    #[test]
+    fn test_opcode_7_overflow() {
+        let mut emu = Chip8::init();
+
+        // Init
+        emu.v[4] = 1;
+
+        store_opcode(&mut emu, &[0x74FF]);
+
+        emu.emulate();
+
+        assert_eq!(emu.v[4], 0);
+        assert_eq!(emu.v[0xF], 0); // Check carry flag
+        assert_eq!(emu.pc, PC_START + 2);
+    }
     #[test]
     fn test_opcode_8_0() {
         let mut emu = Chip8::init();
@@ -890,7 +907,7 @@ mod tests {
         assert_eq!(emu.v[0xF], 1);
         assert_eq!(emu.pc, PC_START + 2);
 
-        // lsb is 0
+        // msb is 0
         emu.emulate();
         assert_eq!(emu.v[2], 0xF4);
         assert_eq!(emu.v[0xF], 0);
@@ -1074,9 +1091,9 @@ mod tests {
         let mut op = [0; 16];
 
         // Init
-        for i in 0..0x10 {
+        for (i, item) in op.iter_mut().enumerate() {
             emu.v[i] = i as u8;
-            op[i] = (0xF029 | (i << 8)) as u16;
+            *item = (0xF029 | (i << 8)) as u16;
         }
 
         store_opcode(&mut emu, &op);
