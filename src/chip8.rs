@@ -37,7 +37,7 @@ pub struct Chip8 {
     memory: [u8; MEM_SIZE],
 
     // CPU Register v0 - vF, vF is used as flag
-    v: [u8; REG_SIZE],
+    pub v: [u8; REG_SIZE],
 
     // Address Register
     addr_reg: usize,
@@ -58,7 +58,9 @@ pub struct Chip8 {
     pub draw_flag: bool,
 
     // Array to store current of hex keyboard (0x0 - 0xF)
-    key: [u8; KEY_SIZE],
+    pub key: [bool; KEY_SIZE],
+
+    pub key_to_wait_reg: Option<usize>,
 
     // Timer at 60 Hz, count down to 0 from current value
     delay_timer: u8,
@@ -92,7 +94,8 @@ impl Chip8 {
             sound_timer: 0,
 
             // Initialize input
-            key: [0; KEY_SIZE],
+            key: [false; KEY_SIZE],
+            key_to_wait_reg: None,
         };
 
         // Load fontset
@@ -109,8 +112,7 @@ impl Chip8 {
         let buf_size = f.read_to_end(&mut buffer)?;
 
         // excluding EOF
-        self.memory[PC_START..(buf_size + PC_START)]
-            .clone_from_slice(&buffer[..buf_size]);
+        self.memory[PC_START..(buf_size + PC_START)].clone_from_slice(&buffer[..buf_size]);
 
         Ok(buf_size) // excluding EOF
     }
@@ -375,7 +377,8 @@ impl Chip8 {
             // println!("sprite[{}]: {:02X}", y_row, sprite); // Debug
             for x_col in 0..8 {
                 if sprite & (0x80 >> x_col) != 0 {
-                    let coordinate = x + x_col + ((y + y_row) * SCREEN_WIDTH);
+                    let coordinate = ((x + x_col) % SCREEN_WIDTH)
+                        + (((y + y_row) % SCREEN_HEIGHT) * SCREEN_WIDTH);
 
                     // Sets vF if pixel is flipped from 1 to 0
                     if self.screen[coordinate] == 1 {
@@ -396,7 +399,7 @@ impl Chip8 {
             0x009E => {
                 // Opcode: EX9E
                 // Skips the next instruction if key[vX] != 0 (it's pressed)
-                if self.key[self.v[x] as usize] != 0 {
+                if self.key[self.v[x] as usize] {
                     self.pc += 4;
                 } else {
                     self.pc += 2;
@@ -405,7 +408,7 @@ impl Chip8 {
             0x00A1 => {
                 // Opcode: EXA1
                 // Skips the next instruction if key[vX] == 0 (it's not pressed)
-                if self.key[self.v[x] as usize] == 0 {
+                if !self.key[self.v[x] as usize] {
                     self.pc += 4;
                 } else {
                     self.pc += 2;
@@ -425,7 +428,8 @@ impl Chip8 {
                 self.pc += 2;
             }
             0x000A => {
-                // TODO: wait for key pressed and store it in vX. How?
+                self.key_to_wait_reg = Some(x);
+                self.pc += 2;
             }
             0x0015 => {
                 self.delay_timer = self.v[x];
@@ -514,7 +518,8 @@ mod tests {
         assert_eq!(emu.draw_flag, false);
         assert_eq!(emu.delay_timer, 0);
         assert_eq!(emu.sound_timer, 0);
-        assert_eq!(emu.key, [0; KEY_SIZE]); // key use u8
+        assert_eq!(emu.key, [false; KEY_SIZE]);
+        assert_eq!(emu.key_to_wait_reg, None);
     }
 
     #[test]

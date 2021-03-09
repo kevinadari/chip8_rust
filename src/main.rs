@@ -40,23 +40,25 @@ fn main() {
     'running: loop {
         for event in event_pump.poll_iter() {
             match event {
-                Event::Quit { .. }
-                | Event::KeyDown {
-                    keycode: Some(Keycode::Escape),
-                    ..
-                } => {
+                Event::Quit { .. } => {
                     break 'running;
                 }
-
+                Event::KeyDown {
+                    keycode: Some(k), ..
+                } => key_press(k, &mut my_chip8),
+                Event::KeyUp {
+                    keycode: Some(k), ..
+                } => key_release(k, &mut my_chip8),
                 _ => {}
             }
         }
         // io::stdin()
-            // .read_line(&mut buffer)
-            // .expect("Failed to read line"); // Debug
+        // .read_line(&mut buffer)
+        // .expect("Failed to read line"); // Debug
 
-        my_chip8.emulate();
-
+        if my_chip8.key_to_wait_reg == None {
+            my_chip8.emulate();
+        }
         // println!("pc: {:02X} - {:04X}", d, my_chip8.opcode); // Debug
 
         if my_chip8.draw_flag {
@@ -64,8 +66,46 @@ fn main() {
             my_chip8.draw_flag = false;
         }
 
-        thread::sleep(Duration::new(0, 100_000_000u32 / 60));
+        thread::sleep(Duration::new(0, 500_000_000u32 / 60));
         // d += 1; // Debug
+    }
+}
+
+fn key_press(code: Keycode, emu: &mut Chip8) {
+    if let Some(y) = reg_keycode(code) {
+        emu.key[y] = true;
+        if let Some(x) = emu.key_to_wait_reg {
+            emu.v[x] = y as u8;
+            emu.key_to_wait_reg = None;
+        }
+    }
+}
+
+fn key_release(code: Keycode, emu: &mut Chip8) {
+    if let Some(y) = reg_keycode(code) {
+        emu.key[y] = false;
+    }
+}
+
+fn reg_keycode(keycode: Keycode) -> Option<usize> {
+    match keycode {
+        Keycode::X => Some(0x0),
+        Keycode::Num1 => Some(0x1),
+        Keycode::Num2 => Some(0x2),
+        Keycode::Num3 => Some(0x3),
+        Keycode::Q => Some(0x4),
+        Keycode::W => Some(0x5),
+        Keycode::E => Some(0x6),
+        Keycode::A => Some(0x7),
+        Keycode::S => Some(0x8),
+        Keycode::D => Some(0x9),
+        Keycode::Z => Some(0xA),
+        Keycode::C => Some(0xB),
+        Keycode::Num4 => Some(0xC),
+        Keycode::R => Some(0xD),
+        Keycode::F => Some(0xE),
+        Keycode::V => Some(0xF),
+        _ => None,
     }
 }
 
